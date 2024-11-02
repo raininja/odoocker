@@ -12,25 +12,17 @@ services:
     ports:
       - 5432:5432
 
-  traefik:
+  nginx:
+    restart: 'no'
+
+  nginx-proxy:
     restart: 'no'
     ports:
       - 80:80
       - 443:443
-      - 8080:8080
-      - 8081:8081
 
-#  nginx:
-#    restart: 'no'
-
-#  nginx-proxy:
-#    restart: 'no'
-#    ports:
-#      - 80:80
-#      - 443:443
-
-#  letsencrypt:
-#    restart: 'no'
+  letsencrypt:
+    restart: 'no'
 
   redis:
     restart: 'no'

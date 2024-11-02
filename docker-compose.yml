@@ -1,4 +1,50 @@
+#networks:
+#  web:
+#    external: true
 services:
+  traefik:
+    image: traefik:v3.2.1
+    container_name: traefik
+    restart: unless-stopped
+    networks:
+      - web
+      - internal
+    command:
+      - --log=true
+      - --log.level=DEBUG
+      - --accessLog=true
+      - --accessLog.filePath=/logs/traefik.log
+      - --accessLog.bufferingSize=100
+      - --accessLog.filters.statusCodes=400-530
+      - --api=true
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.watch=true
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=http
+      - --certificatesResolvers.letsencrypt.acme.email=your@email.com
+      - --certificatesResolvers.letsencrypt.acme.storage=/acme/acme.json
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_acme:/acme
+      - traefik_logs:/logs
+    labels:
+      - "traefik.enable=true"
+      # HTTP-to-HTTPS Redirect
+      - "traefik.http.routers.http-catchall.entrypoints=http"
+      - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    ports:
+      - 80:80
+      - 443:443
+      - 8080:8080
+
   odoo:
     build:
       context: ./
@@ -53,6 +99,57 @@ services:
     networks:
       - internal
     profiles: [$ODOO_PROFILES]
+    labels:                                                                                                                             
+      - traefik.enable=true                                                                                                             
+      #----------------------------------------------- routers for: odoo --------------------------------------------------             
+      # http                                                                                                                            
+      - traefik.http.routers.odoo-http.rule=Host(`${ODOO_HOSTNAME}`)                                                                    
+      - traefik.http.routers.odoo-http.entrypoints=http                                                                                 
+      - traefik.http.routers.odoo-http.middlewares=redirect@file                                                                        
+      - traefik.http.routers.odoo-http.service=odoo                                                                                     
+      # https                                                                                                                           
+      - traefik.http.routers.odoo-https.rule=Host(`${ODOO_HOSTNAME}`)                                                                   
+      - traefik.http.routers.odoo-https.entrypoints=https                                                                               
+      - traefik.http.routers.odoo-https.service=odoo                                                                                    
+      - traefik.http.routers.odoo-https.tls.certresolver=le                                                                             
+      - traefik.http.routers.odoo-https.middlewares=gzip,sslheader,limit                                                                
+      #----------------------------- routes for: odoo/web/database || odoo/website/info  -----------------------------                  
+      # http                                                                                                                            
+      - traefik.http.routers.odoo-db-http.rule=Host(`${ODOO_HOSTNAME}`) && (PathPrefix(`/web/database`) || PathPrefix(`/website/info`)) 
+      - traefik.http.routers.odoo-db-http.entrypoints=http                                                                              
+      - traefik.http.routers.odoo-db-http.service=odoo                                                                                  
+      - traefik.http.routers.odoo-db-http.middlewares=redirect@file                                                                     
+      - traefik.http.services.odoo-db-http.loadbalancer.server.port=8069                                                                
+      # https                                                                                                                           
+      - traefik.http.routers.odoo-db-https.rule=Host(`${ODOO_HOSTNAME}`) && (PathPrefix(`/web/database`) || PathPrefix(`/website/info`))
+      - traefik.http.routers.odoo-db-https.entrypoints=https                                                                            
+      - traefik.http.routers.odoo-db-https.service=odoo                                                                                 
+      - traefik.http.routers.odoo-db-https.tls.certresolver=le                                                                          
+      - traefik.http.routers.odoo-db-https.middlewares=gzip,sslheader,limit                                                             
+      - traefik.http.services.odoo-db-https.loadbalancer.server.port=8069                                                               
+      #---------------------------------------- routes for: odoo/longpolling ------------------------------------------------           
+      # http                                                                                                                            
+      - traefik.http.routers.odoo-im-http.rule=Host(`${ODOO_HOSTNAME}`) && (PathPrefix(`/longpolling`))                                 
+      - traefik.http.routers.odoo-im-http.entrypoints=http                                                                              
+      - traefik.http.routers.odoo-im-http.middlewares=redirect@file                                                                     
+      - traefik.http.routers.odoo-im-http.service=odoo-im                                                                               
+      # https                                                                                                                           
+      - traefik.http.routers.odoo-im-https.rule=Host(`${ODOO_HOSTNAME}`) && (PathPrefix(`/longpolling`))                                
+      - traefik.http.routers.odoo-im-https.entrypoints=https                                                                            
+      - traefik.http.routers.odoo-im-https.service=odoo-im                                                                              
+      - traefik.http.routers.odoo-im-https.tls.certresolver=le                                                                          
+      - traefik.http.routers.odoo-im-https.middlewares=gzip,sslheader,limit                                                             
+                                                                                                                                        
+      #====================================================== services ===========================================================      
+      - traefik.http.services.odoo.loadbalancer.server.port=8069                                                                        
+      - traefik.http.services.odoo-im.loadbalancer.server.port=8072                                                                     
+                                                                                                                                        
+      #===================================================== middlewares =========================================================      
+      - traefik.http.middlewares.gzip.compress=true                                                                                     
+      - traefik.http.middlewares.sslheader.headers.customrequestheaders.X-Forwarded-Proto=https                                         
+      - traefik.http.middlewares.limit.buffering.memRequestBodyBytes=20971520                                                           
+      - traefik.http.middlewares.limit.buffering.maxRequestBodyBytes=20971520                                                           
+                                                                                                                                        
 
   postgres:
     build: 
@@ -79,61 +176,61 @@ services:
       - internal
     profiles: [$POSTGRES_PROFILES]
 
-  nginx:
-    image: nginx:${NGINX_TAG}
-    depends_on:
-      - odoo
-    tty: true
-    expose:
-      - 80/tcp
-    volumes:
-      - ./nginx/nginx.conf:${NGINX_CONF}
-      - ./nginx/default.conf:${NGINX_DEFAULT_CONF}
-    environment:
-      - VIRTUAL_HOST
-      - LETSENCRYPT_HOST
-      - LETSENCRYPT_EMAIL
-      - CORS_ALLOWED_DOMAIN
-    networks:
-      - internal
-    profiles: [$NGINX_PROFILES]
+  # nginx:
+  #   image: nginx:${NGINX_TAG}
+  #   depends_on:
+  #     - odoo
+  #   tty: true
+  #   expose:
+  #     - 80/tcp
+  #   volumes:
+  #     - ./nginx/nginx.conf:${NGINX_CONF}
+  #     - ./nginx/default.conf:${NGINX_DEFAULT_CONF}
+  #   environment:
+  #     - VIRTUAL_HOST
+  #     - LETSENCRYPT_HOST
+  #     - LETSENCRYPT_EMAIL
+  #     - CORS_ALLOWED_DOMAIN
+  #   networks:
+  #     - internal
+  #   profiles: [$NGINX_PROFILES]
 
-  nginx-proxy:
-    image: nginxproxy/nginx-proxy:${NGINX_PROXY_TAG}
-    depends_on:
-      - nginx
-    tty: true
-    volumes:
-      - ./nginx-proxy/nginx.conf:${NGINX_CONF}
-      - ./nginx-proxy/cors.conf:${NGINX_PROXY_CORS_CONF}
-      - html:${NGINX_HTML}
-      - vhost:${NGINX_VHOST}
-      - certs:${NGINX_CERTS}:ro
-      - ${DOCKER_SOCK}:${TEMP_DOCKER_SOCK}:ro
-    environment:
-      - TRUST_DOWNSTREAM_PROXY
-      - CORS_ALLOWED_DOMAIN
-    networks:
-      - internal
-    profiles: [$NGINX_PROXY_PROFILES]
+  # nginx-proxy:
+  #   image: nginxproxy/nginx-proxy:${NGINX_PROXY_TAG}
+  #   depends_on:
+  #     - nginx
+  #   tty: true
+  #   volumes:
+  #     - ./nginx-proxy/nginx.conf:${NGINX_CONF}
+  #     - ./nginx-proxy/cors.conf:${NGINX_PROXY_CORS_CONF}
+  #     - html:${NGINX_HTML}
+  #     - vhost:${NGINX_VHOST}
+  #     - certs:${NGINX_CERTS}:ro
+  #     - ${DOCKER_SOCK}:${TEMP_DOCKER_SOCK}:ro
+  #   environment:
+  #     - TRUST_DOWNSTREAM_PROXY
+  #     - CORS_ALLOWED_DOMAIN
+  #   networks:
+  #     - internal
+  #   profiles: [$NGINX_PROXY_PROFILES]
 
-  letsencrypt:
-    image: nginxproxy/acme-companion:${ACME_COMPANION_TAG}
-    depends_on:
-      - nginx-proxy
-    volumes_from:
-      - nginx-proxy:rw
-    volumes:
-      - certs:${NGINX_CERTS}:rw
-      - acme:${NGINX_ACME}
-      - ${DOCKER_SOCK}:${DOCKER_SOCK}:ro
-    environment:
-      - ACME_CA_URI
-      - CERTS_UPDATE_INTERVAL
-      - DEFAULT_EMAIL
-    networks:
-      - internal
-    profiles: [$ACME_COMPANION_PROFILES]
+  # letsencrypt:
+  #   image: nginxproxy/acme-companion:${ACME_COMPANION_TAG}
+  #   depends_on:
+  #     - nginx-proxy
+  #   volumes_from:
+  #     - nginx-proxy:rw
+  #   volumes:
+  #     - certs:${NGINX_CERTS}:rw
+  #     - acme:${NGINX_ACME}
+  #     - ${DOCKER_SOCK}:${DOCKER_SOCK}:ro
+  #   environment:
+  #     - ACME_CA_URI
+  #     - CERTS_UPDATE_INTERVAL
+  #     - DEFAULT_EMAIL
+  #   networks:
+  #     - internal
+  #   profiles: [$ACME_COMPANION_PROFILES]
 
   redis:
     image: eqalpha/keydb:${KEYDB_TAG}
@@ -171,7 +268,7 @@ services:
       args:
         - PGADMIN_TAG
     depends_on:
-      - nginx-proxy
+      - traefik
     expose:
       - 80
     volumes:
@@ -214,9 +311,13 @@ volumes:
   pgadmin-data:
   html:
   vhost:
-  certs:
-  acme:
+  #certs:
+  #acme:
+  traefik_acme:
+  traefik_logs:
 
 networks:
+  external:
+    driver: web
   internal:
     driver: bridge
